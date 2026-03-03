@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   run:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,14 +23,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install Pillow
+          if (Test-Path requirements.txt) { pip install -r requirements.txt }
+          pip install Pillow pyinstaller
 
       - name: Smoke test (CLI mode)
         run: |
           python --version
           python -c "from PIL import Image; print('Pillow OK:', Image.__version__)"
-          # 生成一个最小 GIF
           python - << 'PY'
           from PIL import Image
           im1 = Image.new("RGBA", (16, 16), (255, 0, 0, 255))
@@ -38,6 +37,16 @@ jobs:
           im1.save("test.gif", save_all=True, append_images=[im2], duration=100, loop=0)
           print("Created test.gif")
           PY
-          # CLI 拆帧（保存 sheet）
           python gif_divider.py --input test.gif --save-mode single --output out.png
-          test -f out.png
+          if (!(Test-Path out.png)) { throw "out.png not found" }
+
+      - name: Build exe
+        run: |
+          python -m PyInstaller --onefile --windowed --name "GIF拆帧工具" gif_divider.py
+
+      - name: Upload exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: dist/*.exe
+          if-no-files-found: error
