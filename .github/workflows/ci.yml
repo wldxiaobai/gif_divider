@@ -27,16 +27,20 @@ jobs:
           pip install Pillow pyinstaller
 
       - name: Smoke test (CLI mode)
+        shell: pwsh
         run: |
           python --version
           python -c "from PIL import Image; print('Pillow OK:', Image.__version__)"
-          python - << 'PY'
+
+          @'
           from PIL import Image
           im1 = Image.new("RGBA", (16, 16), (255, 0, 0, 255))
           im2 = Image.new("RGBA", (16, 16), (0, 255, 0, 255))
           im1.save("test.gif", save_all=True, append_images=[im2], duration=100, loop=0)
           print("Created test.gif")
-          PY
+          '@ | Out-File -FilePath gen_gif.py -Encoding utf8
+
+          python gen_gif.py
           python gif_divider.py --input test.gif --save-mode single --output out.png
           if (!(Test-Path out.png)) { throw "out.png not found" }
 
