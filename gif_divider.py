@@ -1,4 +1,5 @@
 import os
+import sys
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -543,7 +544,128 @@ class GifDividerApp:
         self.canvas.config(cursor="")
 
 
-if __name__ == "__main__":
+def _has_display() -> bool:
+    """在 Linux/CI 下判断是否有图形显示环境。"""
+    # Windows/macOS 通常不依赖 DISPLAY；这里主要处理 Linux runner
+    if os.name == "nt":
+        return True
+    # macOS 上多数情况下也可以启动 Tk，这里保守认为可用
+    if sys.platform == "darwin":
+        return True
+
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def _in_github_actions() -> bool:
+    return os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
+
+
+def _run_cli(argv: list[str]) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Decompose GIF images into PNG frames (CLI mode)."
+    )
+    parser.add_argument("--cli", action="store_true", help="Force CLI mode.")
+    parser.add_argument("-i", "--input", help="Input GIF path.")
+    parser.add_argument(
+        "-o",
+        "--output",
+        help="Output directory (when saving frames) OR output png path (when saving sheet).",
+    )
+    parser.add_argument("--max-cols", type=int, default=10)
+    parser.add_argument("--max-rows", type=int, default=10)
+    parser.add_argument("--scale", type=float, default=1.0)
+    parser.add_argument(
+        "--direction",
+        choices=["horizontal", "vertical"],
+        default="horizontal",
+    )
+    parser.add_argument(
+        "--save-mode",
+        choices=["single", "folder"],
+        default="single",
+        help="single: save sheet png; folder: save all frames into a directory",
+    )
+
+    args = parser.parse_args(argv)
+
+    # 在 CI 下如果没给 input，就不要尝试弹窗，直接报错并给出用法
+    if not args.input:
+        parser.error("Missing --input. In headless/CI environment you must provide --input.")
+
+    gif_path = args.input
+    if not os.path.isfile(gif_path):
+        raise FileNotFoundError(f"Input GIF not found: {gif_path}")
+
+    gif = Image.open(gif_path)
+    n_frames = getattr(gif, "n_frames", 1)
+    frames = []
+    for i in range(n_frames):
+        gif.seek(i)
+        frames.append(gif.copy().convert("RGBA"))
+
+    total = len(frames)
+    fw, fh = frames[0].size
+    fw_s, fh_s = int(fw * args.scale), int(fh * args.scale)
+
+    if args.scale != 1.0:
+        frames = [f.resize((fw_s, fh_s), Image.LANCZOS) for f in frames]
+
+    # 计算行列
+    if args.direction == "horizontal":
+        cols = min(args.max_cols, total)
+        rows = min(args.max_rows, -(-total // cols))
+    else:
+        rows = min(args.max_rows, total)
+        cols = min(args.max_cols, -(-total // rows))
+    placed = min(total, cols * rows)
+
+    # 输出
+    in_dir = os.path.dirname(os.path.abspath(gif_path))
+    base = os.path.splitext(os.path.basename(gif_path))[0]
+
+    if args.save_mode == "folder":
+        out_dir = args.output or os.path.join(in_dir, base + "_frames")
+        os.makedirs(out_dir, exist_ok=True)
+        for i, frame in enumerate(frames):
+            frame.save(os.path.join(out_dir, f"frame_{i:04d}.png"))
+        print(f"Saved {total} frames to: {out_dir}")
+    else:
+        sheet = Image.new("RGBA", (cols * fw_s, rows * fh_s), (0, 0, 0, 0))
+        for idx, frame in enumerate(frames[:placed]):
+            if args.direction == "horizontal":
+                r, c = divmod(idx, cols)
+            else:
+                c, r = divmod(idx, rows)
+            sheet.paste(frame, (c * fw_s, r * fh_s))
+
+        out_path = args.output or os.path.join(in_dir, f"{base}_sheet.png")
+        sheet.save(out_path)
+        print(f"Saved sheet ({cols}x{rows}, placed={placed}/{total}) to: {out_path}")
+
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # 只要用户传了任何参数（或者显式 --cli），我们就优先当作想走 CLI
+    wants_cli = ("--cli" in argv) or any(a.startswith("-") for a in argv)
+
+    headless = (not _has_display()) or _in_github_actions()
+
+    if wants_cli or headless:
+        return _run_cli(argv)
+
+    # 否则默认 GUI
     root = tk.Tk()
     GifDividerApp(root)
     root.mainloop()
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    raise SystemExit(main())

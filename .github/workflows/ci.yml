@@ -26,8 +26,18 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install Pillow
 
-      - name: Smoke test (run the tool)
+      - name: Smoke test (CLI mode)
         run: |
           python --version
           python -c "from PIL import Image; print('Pillow OK:', Image.__version__)"
-          python gif_divider.py
+          # 生成一个最小 GIF
+          python - << 'PY'
+          from PIL import Image
+          im1 = Image.new("RGBA", (16, 16), (255, 0, 0, 255))
+          im2 = Image.new("RGBA", (16, 16), (0, 255, 0, 255))
+          im1.save("test.gif", save_all=True, append_images=[im2], duration=100, loop=0)
+          print("Created test.gif")
+          PY
+          # CLI 拆帧（保存 sheet）
+          python gif_divider.py --input test.gif --save-mode single --output out.png
+          test -f out.png
